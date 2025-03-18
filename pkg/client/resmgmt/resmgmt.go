@@ -196,6 +196,49 @@ func New(ctxProvider context.ClientProvider, opts ...ClientOption) (*Client, err
 	return resourceClient, nil
 }
 
+// GenesisBlock returns the genesis block from the defined orderer for a specific channel.
+//  Parameters:
+//  channelID is the channel ID for which the genesis block is requested
+//  options holds optional request options
+//
+//  Returns:
+//  the genesis block for the channel
+//  an error if retrieval fails
+func (rc *Client) GenesisBlock(channelID string, options ...RequestOption) (*common.Block, error) {
+	if channelID == "" {
+		return nil, errors.New("must provide channel ID")
+	}
+
+	opts, err := rc.prepareRequestOpts(options...)
+	if err != nil {
+		return nil, errors.WithMessage(err, "failed to get opts for GenesisBlock")
+	}
+
+	//resolve timeouts
+	rc.resolveTimeouts(&opts)
+
+	//set parent request context for overall timeout
+	parentReqCtx, parentReqCancel := contextImpl.NewRequest(rc.ctx, contextImpl.WithTimeout(opts.Timeouts[fab.ResMgmt]), contextImpl.WithParent(opts.ParentContext))
+	parentReqCtx = reqContext.WithValue(parentReqCtx, contextImpl.ReqContextTimeoutOverrides, opts.Timeouts)
+	defer parentReqCancel()
+
+	orderer, err := rc.requestOrderer(&opts, channelID)
+	if err != nil {
+		return nil, errors.WithMessage(err, "failed to find orderer for request")
+	}
+
+	ordrReqCtx, ordrReqCtxCancel := contextImpl.NewRequest(rc.ctx, contextImpl.WithTimeoutType(fab.OrdererResponse), contextImpl.WithParent(parentReqCtx))
+	defer ordrReqCtxCancel()
+
+	genesisBlock, err := resource.GenesisBlockFromOrderer(ordrReqCtx, channelID, orderer, resource.WithRetry(opts.Retry))
+	if err != nil {
+		return nil, errors.WithMessage(err, "genesis block retrieval failed")
+	}
+
+	return genesisBlock, nil
+}
+
+
 // JoinChannel allows for peers to join existing channel with optional custom options (specific peers, filtered peers). If peer(s) are not specified in options it will default to all peers that belong to client's MSP.
 //  Parameters:
 //  channel is manadatory channel name
